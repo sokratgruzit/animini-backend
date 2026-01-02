@@ -41,7 +41,7 @@ export class AuthService {
       data: { token, userId: user.id, expiresAt: expires },
     });
 
-    const baseUrl = process.env.APP_URL || 'http://localhost:4000';
+    const baseUrl = process.env.APP_URL || 'http://localhost:3000';
     const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
     await emailService.sendVerificationEmail(user.email, verifyUrl);
 
