@@ -101,7 +101,7 @@ export const refreshToken = async (req: Request, res: Response) => {
 
   if (!currentRefreshToken) {
     return res
-      .status(400)
+      .status(401)
       .json({ success: false, message: 'Refresh token not found in cookie' });
   }
 
@@ -110,7 +110,11 @@ export const refreshToken = async (req: Request, res: Response) => {
 
     setRefreshCookie(res, result.refreshToken);
 
-    return res.json({ success: true, accessToken: result.accessToken });
+    return res.json({
+      success: true,
+      accessToken: result.accessToken,
+      user: result.user,
+    });
   } catch (e) {
     if (e instanceof Error && e.message === 'Invalid refresh token') {
       return res.status(401).json({ success: false, message: e.message });

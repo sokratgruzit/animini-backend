@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 
 import authRouter from './routes/auth';
+import walletRouter from './routes/wallet';
 
 dotenv.config();
 
@@ -19,8 +20,9 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(cookieParser());
 
 app.use('/api/auth', authRouter);
+app.use('/api/wallet', walletRouter);
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server started on http://localhost:${PORT}`);
 });

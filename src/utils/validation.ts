@@ -25,5 +25,10 @@ export const loginSchema = z.object({
     ),
 });
 
+export const depositSchema = z.object({
+  amount: z.number().int().positive('Amount must be a positive integer'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type DepositInput = z.infer<typeof depositSchema>;

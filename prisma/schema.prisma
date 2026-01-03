@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,6 +13,22 @@ enum Role {
   USER
   AUTHOR
   CRITIC
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAW
+  TRANSFER        // Added: For user-to-user transfers
+  AUTHOR_PAYOUT   // Added: Payment to author
+  REVIEW_COST     // Added: Cost for a critic to post a review
+  USER_VOTE_COST  // Added: Cost for a user to vote
+  CRITIC_REWARD   // Added: Reward for critic reputation gain
 }
 
 model EmailVerification {
@@ -32,6 +50,21 @@ model User {
   emailVerifications EmailVerification[]
   isAdmin           Boolean             @default(false)
   roles             Role[]              @default([USER])
+  
+  balance           Int                 @default(0)
+  reputation        Int                 @default(0) // <--- Added Reputation
+  transactions      Transaction[]
+
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
+}
+
+model Transaction {
+  id        String          @id @default(uuid())
+  amount    Int
+  type      TransactionType // Now using the expanded Enum
+  status    TransactionStatus @default(COMPLETED) // Now using the Status Enum
+  user      User            @relation(fields: [userId], references: [id])
+  userId    Int
+  createdAt DateTime        @default(now())
 }

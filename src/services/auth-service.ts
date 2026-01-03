@@ -1,5 +1,3 @@
-// src/services/auth-service.ts
-
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../client';
@@ -105,9 +103,8 @@ export class AuthService {
     };
   }
 
-  public async refresh(
-    currentRefreshToken: string
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+  public async refresh(currentRefreshToken: string): Promise<AuthResult> {
+    // Changed return type to AuthResult to include user
     const payload = jwt.verify(currentRefreshToken, REFRESH_SECRET) as {
       userId: number;
     };
@@ -128,7 +125,20 @@ export class AuthService {
       data: { refreshToken: newRefreshToken },
     });
 
-    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        isAdmin: user.isAdmin,
+        roles: user.roles,
+        emailVerified: user.emailVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
   }
 
   public async verifyEmail(token: string): Promise<void> {
