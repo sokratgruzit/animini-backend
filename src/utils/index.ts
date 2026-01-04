@@ -12,7 +12,10 @@ import {
   LoginInput,
 } from './validation';
 
+import { calculateFiatAmount } from './payment';
+
 export {
+  calculateFiatAmount,
   generateAccessToken,
   generateRefreshToken,
   hashPassword,
