@@ -1,6 +1,7 @@
 import { prisma } from '../client';
 import { TransactionType, TransactionStatus } from '@prisma/client';
 import { calculateFiatAmount } from '../utils';
+import { loggerService } from '../services/logger-service';
 import { PAYMENT_CURRENCY } from '../constants';
 
 export class WalletService {
@@ -172,19 +173,32 @@ export class WalletService {
    */
   public async completeDeposit(transactionId: string) {
     return await prisma.$transaction(async (tx) => {
+      // 1. Attempt to update ONLY if status is still PENDING
+      // This is an atomic operation at the database level
+      const updatedTransaction = await tx.transaction.updateMany({
+        where: {
+          id: transactionId,
+          status: TransactionStatus.PENDING,
+        },
+        data: {
+          status: TransactionStatus.COMPLETED,
+        },
+      });
+
+      // 2. If no rows were updated, it means the transaction was already processed
+      // by a concurrent webhook or worker.
+      if (updatedTransaction.count === 0) {
+        return null;
+      }
+
+      // 3. Since we successfully marked it as COMPLETED, now we get the full data
       const transaction = await tx.transaction.findUnique({
         where: { id: transactionId },
       });
 
-      if (!transaction || transaction.status !== TransactionStatus.PENDING) {
-        return null;
-      }
+      if (!transaction) return null;
 
-      await tx.transaction.update({
-        where: { id: transactionId },
-        data: { status: TransactionStatus.COMPLETED },
-      });
-
+      // 4. Update user balance
       const updatedUser = await tx.user.update({
         where: { id: transaction.userId },
         data: {
@@ -202,6 +216,100 @@ export class WalletService {
   public async getTransactionById(transactionId: string) {
     return await prisma.transaction.findUnique({
       where: { id: transactionId },
+    });
+  }
+
+  /**
+   * Syncs a single pending transaction with YooKassa API.
+   * This is the core logic for both the background worker and manual checks.
+   */
+  public async syncTransactionStatus(
+    transactionId: string
+  ): Promise<TransactionStatus> {
+    const transaction = await this.getTransactionById(transactionId);
+
+    if (!transaction || transaction.status !== TransactionStatus.PENDING) {
+      return transaction?.status || TransactionStatus.FAILED;
+    }
+
+    if (!transaction.externalId) {
+      // If no externalId exists yet, the user probably never reached YooKassa
+      // We can mark it as FAILED if it's too old (e.g., > 30 mins)
+      return TransactionStatus.PENDING;
+    }
+
+    try {
+      const response = await fetch(`api.yookassa.ru{transaction.externalId}`, {
+        headers: {
+          Authorization:
+            'Basic ' +
+            Buffer.from(
+              `${process.env.YCASSA_SHOP_ID}:${process.env.YCASSA_SECRET_KEY}`
+            ).toString('base64'),
+        },
+      });
+
+      const data: any = await response.json();
+
+      if (data.status === 'succeeded') {
+        await this.completeDeposit(transactionId);
+        return TransactionStatus.COMPLETED;
+      }
+
+      if (data.status === 'canceled') {
+        await prisma.transaction.update({
+          where: { id: transactionId },
+          data: { status: TransactionStatus.FAILED }, // Or TransactionStatus.CANCELED
+        });
+        return TransactionStatus.FAILED;
+      }
+
+      return TransactionStatus.PENDING;
+    } catch (error) {
+      loggerService.error(
+        { error, transactionId },
+        'Failed to sync transaction status'
+      );
+      throw error;
+    }
+  }
+
+  public async getStalePendingTransactions(limit: number = 50) {
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    return prisma.transaction.findMany({
+      where: {
+        status: TransactionStatus.PENDING,
+        createdAt: {
+          lt: tenMinutesAgo,
+          gt: oneDayAgo,
+        },
+        externalId: { not: null },
+      },
+      select: { id: true },
+      take: limit,
+    });
+  }
+
+  /**
+   * Marks transactions as FAILED if they have no externalId
+   * and were created more than 1 hour ago.
+   */
+  public async cancelAbandonedTransactions() {
+    const oneHourAgo = new Date(Date.now() - 30 * 60 * 1000); //new Date(Date.now() - 60 * 60 * 1000);
+
+    return await prisma.transaction.updateMany({
+      where: {
+        status: TransactionStatus.PENDING,
+        externalId: null,
+        createdAt: {
+          lt: oneHourAgo,
+        },
+      },
+      data: {
+        status: TransactionStatus.FAILED,
+      },
     });
   }
 }
