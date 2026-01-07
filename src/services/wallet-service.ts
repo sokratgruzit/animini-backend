@@ -1,8 +1,13 @@
 import { prisma } from '../client';
-import { TransactionType, TransactionStatus } from '@prisma/client';
+import {
+  TransactionType,
+  TransactionStatus,
+  VideoStatus,
+  ReviewType,
+} from '@prisma/client';
 import { calculateFiatAmount } from '../utils';
 import { loggerService } from '../services/logger-service';
-import { PAYMENT_CURRENCY } from '../constants';
+import { PAYMENT_CURRENCY, VIDEO_ECONOMY } from '../constants';
 
 export class WalletService {
   /**
@@ -310,6 +315,173 @@ export class WalletService {
       data: {
         status: TransactionStatus.FAILED,
       },
+    });
+  }
+
+  /**
+   * Logic for processing a user vote for a video.
+   */
+  public async processVideoVote(
+    userId: number,
+    videoId: string,
+    amount: number
+  ) {
+    return await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { balance: true },
+      });
+
+      if (!user || user.balance < amount) {
+        throw new Error('Insufficient funds to vote');
+      }
+
+      const video = await tx.video.findUnique({
+        where: { id: videoId },
+        include: {
+          reviews: {
+            where: { isExecuted: true },
+            include: { critic: true },
+          },
+        },
+      });
+
+      if (!video || video.status !== VideoStatus.PENDING_SERIES) {
+        throw new Error('Video is not available for voting');
+      }
+
+      await tx.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: amount } },
+      });
+
+      await tx.vote.create({
+        data: {
+          userId,
+          videoId,
+          amount,
+        },
+      });
+
+      const updatedVideo = await tx.video.update({
+        where: { id: videoId },
+        data: { collectedFunds: { increment: amount } },
+      });
+
+      if (updatedVideo.collectedFunds >= updatedVideo.votesRequired) {
+        await this.finalizeVideoPool(videoId, tx);
+      }
+
+      return updatedVideo;
+    });
+  }
+
+  /**
+   * Finalizes the pool and distributes funds based on economy constants.
+   */
+  private async finalizeVideoPool(videoId: string, tx: any) {
+    const video = await tx.video.findUnique({
+      where: { id: videoId },
+      include: {
+        reviews: { where: { isExecuted: true }, include: { critic: true } },
+      },
+    });
+
+    const totalPool = video.collectedFunds;
+
+    let authorRatio = VIDEO_ECONOMY.BASE_SHARES.AUTHOR;
+    let platformRatio = VIDEO_ECONOMY.BASE_SHARES.PLATFORM;
+    let criticRatio = VIDEO_ECONOMY.BASE_SHARES.CRITICS;
+
+    for (const review of video.reviews) {
+      const reputationBonus =
+        review.critic.reputation * VIDEO_ECONOMY.CRITIC_REPUTATION_WEIGHT;
+
+      if (review.type === ReviewType.NEGATIVE) {
+        authorRatio -= VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.AUTHOR_REDUCTION;
+        platformRatio +=
+          VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.PLATFORM_GAIN + reputationBonus;
+        criticRatio += VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.CRITIC_GAIN;
+      } else {
+        platformRatio -= VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.PLATFORM_REDUCTION;
+        criticRatio +=
+          VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.CRITIC_GAIN + reputationBonus;
+      }
+    }
+
+    const authorAmount = Math.floor(totalPool * authorRatio);
+    const platformAmount = Math.floor(totalPool * platformRatio);
+    const criticsTotalAmount = Math.floor(totalPool * criticRatio);
+
+    // 1. Author Payout
+    await tx.user.update({
+      where: { id: video.authorId },
+      data: { balance: { increment: authorAmount } },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId: video.authorId,
+        amount: authorAmount,
+        type: TransactionType.AUTHOR_PAYOUT,
+        status: TransactionStatus.COMPLETED,
+        videoId,
+      },
+    });
+
+    // 2. Critics Payout (Split)
+    if (video.reviews.length > 0) {
+      const perCriticAmount = Math.floor(
+        criticsTotalAmount / video.reviews.length
+      );
+      for (const review of video.reviews) {
+        await tx.user.update({
+          where: { id: review.criticId },
+          data: { balance: { increment: perCriticAmount } },
+        });
+        await tx.transaction.create({
+          data: {
+            userId: review.criticId,
+            amount: perCriticAmount,
+            type: TransactionType.CRITIC_REWARD,
+            status: TransactionStatus.COMPLETED,
+            videoId,
+          },
+        });
+      }
+    }
+
+    // 3. Status Update
+    await tx.video.update({
+      where: { id: videoId },
+      data: { status: VideoStatus.PUBLISHED },
+    });
+  }
+
+  /**
+   * Logic for voting for a review to execute its impact.
+   */
+  public async processReviewVote(userId: number, reviewId: string) {
+    return await prisma.$transaction(async (tx) => {
+      const review = await tx.review.findUnique({
+        where: { id: reviewId },
+      });
+
+      if (!review || review.isExecuted) return review;
+
+      const updatedReview = await tx.review.update({
+        where: { id: reviewId },
+        data: { currentVotes: { increment: 1 } },
+      });
+
+      if (updatedReview.currentVotes >= updatedReview.votesRequired) {
+        return await tx.review.update({
+          where: { id: reviewId },
+          data: { isExecuted: true },
+        });
+      }
+
+      return updatedReview;
     });
   }
 }

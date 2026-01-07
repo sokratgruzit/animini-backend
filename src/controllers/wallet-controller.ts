@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { AuthRequest } from '../types/auth';
 import { walletService } from '../services/wallet-service';
 import { loggerService } from '../services/logger-service';
-import { depositSchema } from '../utils/validation';
+import { depositSchema } from '../utils';
 
 export const getBalance = async (req: AuthRequest, res: Response) => {
   try {

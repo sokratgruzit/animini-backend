@@ -5,6 +5,9 @@ import cookieParser from 'cookie-parser';
 
 import authRouter from './routes/auth';
 import walletRouter from './routes/wallet';
+import videoRouter from './routes/video';
+import interactionRouter from './routes/interaction';
+
 import { initTransactionWorker } from './workers/transaction-worker';
 
 dotenv.config();
@@ -22,6 +25,8 @@ app.use(cookieParser());
 
 app.use('/api/auth', authRouter);
 app.use('/api/wallet', walletRouter);
+app.use('/api/videos', videoRouter);
+app.use('/api/interactions', interactionRouter);
 
 const PORT = process.env.PORT || 3000;
 

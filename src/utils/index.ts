@@ -6,10 +6,18 @@ import {
 } from './auth';
 
 import {
+  depositSchema,
+  createVideoSchema,
+  createReviewSchema,
+  voteReviewSchema,
+  voteVideoSchema,
   registerSchema,
   loginSchema,
   RegisterInput,
   LoginInput,
+  VideotInput,
+  VoteReviewInput,
+  VoteVideoInput,
 } from './validation';
 
 import { calculateFiatAmount } from './payment';
@@ -24,4 +32,12 @@ export {
   loginSchema,
   RegisterInput,
   LoginInput,
+  depositSchema,
+  createVideoSchema,
+  createReviewSchema,
+  voteReviewSchema,
+  voteVideoSchema,
+  VideotInput,
+  VoteReviewInput,
+  VoteVideoInput,
 };

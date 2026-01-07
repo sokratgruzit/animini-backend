@@ -12,3 +12,27 @@ export const EXCHANGE_RATE_RUB_PER_COIN = 10;
  * Currency code required by the payment provider (YooKassa)
  */
 export const PAYMENT_CURRENCY = 'RUB';
+
+export const VIDEO_ECONOMY = {
+  BASE_SHARES: {
+    AUTHOR: 0.7,
+    PLATFORM: 0.2,
+    CRITICS: 0.1,
+  },
+
+  NEGATIVE_REVIEW_PENALTY: {
+    AUTHOR_REDUCTION: 0.1,
+    PLATFORM_GAIN: 0.05,
+    CRITIC_GAIN: 0.05,
+  },
+
+  POSITIVE_REVIEW_BOOST: {
+    PLATFORM_REDUCTION: 0.05,
+    CRITIC_GAIN: 0.05,
+  },
+
+  CRITIC_REPUTATION_WEIGHT: 0.001,
+
+  DEFAULT_VIDEO_THRESHOLD: 1000,
+  DEFAULT_REVIEW_THRESHOLD: 50,
+};
