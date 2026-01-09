@@ -25,14 +25,14 @@ enum TransactionType {
   TRANSFER
   AUTHOR_PAYOUT
   CRITIC_REWARD
-  PLATFORM_FEE     
-  VOTE_PAYMENT     
+  PLATFORM_FEE
+  VOTE_PAYMENT
 }
 
 enum VideoStatus {
-  PENDING_SERIES   
-  PUBLISHED        
-  MODERATION       
+  DRAFT
+  MODERATION
+  PUBLISHED
 }
 
 enum ReviewType {
@@ -50,26 +50,46 @@ model EmailVerification {
 }
 
 model User {
-  id                Int                 @id @default(autoincrement())
-  email             String              @unique
-  name              String?
-  password          String
-  refreshToken      String?
-  emailVerified     Boolean             @default(false)
+  id                 Int                 @id @default(autoincrement())
+  email              String              @unique
+  name               String?
+  password           String
+  refreshToken       String?
+  emailVerified      Boolean             @default(false)
   emailVerifications EmailVerification[]
-  isAdmin           Boolean             @default(false)
-  roles             Role[]              @default([USER])
+  isAdmin            Boolean             @default(false)
+  roles              Role[]              @default([USER])
   
-  balance           Int                 @default(0)
-  reputation        Int                 @default(0)
+  balance            Int                 @default(0)
+  reputation         Int                 @default(0)
   
-  transactions      Transaction[]
-  videos            Video[]             // Content created by AUTHOR
-  reviews           Review[]            // Expert reviews by CRITIC
-  votes             Vote[]              // User votes
+  transactions       Transaction[]
+  series             Series[]            // Added: Group of content created by AUTHOR
+  videos             Video[]             // Individual video files
+  reviews            Review[]            
+  votes              Vote[]              
 
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model Series {
+  id             String      @id @default(uuid())
+  title          String
+  description    String?
+  coverUrl       String?     // Visual representation of the series
+  
+  // Economy moved to Series level for project-based funding
+  votesRequired  Int         @default(1000)
+  collectedFunds Int         @default(0)
+
+  author         User        @relation(fields: [authorId], references: [id])
+  authorId       Int
+  
+  videos         Video[]     // Episodes within this series
+  
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 }
 
 model Video {
@@ -77,11 +97,12 @@ model Video {
   title          String
   description    String?
   url            String
-  status         VideoStatus @default(MODERATION)
+  status         VideoStatus @default(DRAFT)
   
-  votesRequired  Int         @default(1000)
-  collectedFunds Int         @default(0)     // Total coins collected from votes
-  
+  // Link to the parent Series
+  series         Series      @relation(fields: [seriesId], references: [id])
+  seriesId       String
+
   author         User        @relation(fields: [authorId], references: [id])
   authorId       Int
   
@@ -97,10 +118,9 @@ model Review {
   content        String
   type           ReviewType
   
-  // Voting for the review itself
-  votesRequired  Int         @default(50)    // Votes needed to "execute" review impact
+  votesRequired  Int         @default(50)    
   currentVotes   Int         @default(0)
-  isExecuted     Boolean     @default(false) // Whether impact has been applied
+  isExecuted     Boolean     @default(false) 
   
   critic         User        @relation(fields: [criticId], references: [id])
   criticId       Int
@@ -113,7 +133,7 @@ model Review {
 
 model Vote {
   id         String   @id @default(uuid())
-  amount     Int      @default(1) // Cost of this specific vote
+  amount     Int      @default(1) 
   
   user       User     @relation(fields: [userId], references: [id])
   userId     Int
@@ -121,7 +141,6 @@ model Vote {
   video      Video?   @relation(fields: [videoId], references: [id])
   videoId    String?
   
-  // If vote is specifically for a review
   reviewId   String?
   
   createdAt  DateTime @default(now())
@@ -136,7 +155,6 @@ model Transaction {
   user       User              @relation(fields: [userId], references: [id])
   userId     Int
   
-  // Optional: Link transaction to a specific video
   videoId    String?
   
   createdAt  DateTime          @default(now())

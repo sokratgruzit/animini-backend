@@ -7,17 +7,21 @@ import {
 
 import {
   depositSchema,
+  createSeriesSchema, // Added
   createVideoSchema,
   createReviewSchema,
   voteReviewSchema,
   voteVideoSchema,
   registerSchema,
   loginSchema,
+  uploadRequestSchema, // Added
   RegisterInput,
   LoginInput,
-  VideotInput,
+  CreateSeriesInput, // Added
+  CreateVideoInput, // Corrected from VideotInput
   VoteReviewInput,
   VoteVideoInput,
+  UploadRequestInput, // Added
 } from './validation';
 
 import { calculateFiatAmount } from './payment';
@@ -28,16 +32,22 @@ export {
   generateRefreshToken,
   hashPassword,
   comparePassword,
+  // Schemas
   registerSchema,
   loginSchema,
-  RegisterInput,
-  LoginInput,
   depositSchema,
+  createSeriesSchema,
   createVideoSchema,
   createReviewSchema,
   voteReviewSchema,
   voteVideoSchema,
-  VideotInput,
+  uploadRequestSchema,
+  // Types
+  RegisterInput,
+  LoginInput,
+  CreateSeriesInput,
+  CreateVideoInput,
   VoteReviewInput,
   VoteVideoInput,
+  UploadRequestInput,
 };

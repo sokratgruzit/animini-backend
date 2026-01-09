@@ -8,6 +8,9 @@ import {
   voteReviewSchema,
 } from '../utils';
 
+/**
+ * Handle user voting for a specific video episode
+ */
 export const voteForVideo = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
@@ -16,15 +19,19 @@ export const voteForVideo = async (req: AuthRequest, res: Response) => {
     }
 
     const { videoId, amount } = voteVideoSchema.parse(req.body);
+
+    // walletService now returns video with included series data
     const updatedVideo = await walletService.processVideoVote(
       userId,
       videoId,
       amount
     );
 
+    // FIX: Accessing economy data from the parent Series level
     return res.json({
       success: true,
-      collectedFunds: updatedVideo.collectedFunds,
+      collectedFunds: updatedVideo.series.collectedFunds, // Economy moved here
+      votesRequired: updatedVideo.series.votesRequired, // Economy moved here
       status: updatedVideo.status,
     });
   } catch (e: any) {
@@ -70,7 +77,6 @@ export const voteForReview = async (req: AuthRequest, res: Response) => {
       reviewId
     );
 
-    // Add this check to fix ts(18047)
     if (!updatedReview) {
       return res.status(404).json({
         success: false,

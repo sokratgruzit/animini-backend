@@ -126,7 +126,6 @@ export class WalletService {
 
   /**
    * Creates a pending transaction and prepares YooKassa payment data
-   * Uses utility for fiat calculation (2026)
    */
   public async createDepositOrder(userId: number, amount: number) {
     const fiatValue = calculateFiatAmount(amount);
@@ -163,9 +162,6 @@ export class WalletService {
     };
   }
 
-  /**
-   * NEW: Updates transaction with YooKassa external payment ID
-   */
   public async updateExternalId(transactionId: string, externalId: string) {
     return await prisma.transaction.update({
       where: { id: transactionId },
@@ -173,13 +169,8 @@ export class WalletService {
     });
   }
 
-  /**
-   * Finalize transaction and update user balance
-   */
   public async completeDeposit(transactionId: string) {
     return await prisma.$transaction(async (tx) => {
-      // 1. Attempt to update ONLY if status is still PENDING
-      // This is an atomic operation at the database level
       const updatedTransaction = await tx.transaction.updateMany({
         where: {
           id: transactionId,
@@ -190,20 +181,16 @@ export class WalletService {
         },
       });
 
-      // 2. If no rows were updated, it means the transaction was already processed
-      // by a concurrent webhook or worker.
       if (updatedTransaction.count === 0) {
         return null;
       }
 
-      // 3. Since we successfully marked it as COMPLETED, now we get the full data
       const transaction = await tx.transaction.findUnique({
         where: { id: transactionId },
       });
 
       if (!transaction) return null;
 
-      // 4. Update user balance
       const updatedUser = await tx.user.update({
         where: { id: transaction.userId },
         data: {
@@ -215,19 +202,12 @@ export class WalletService {
     });
   }
 
-  /**
-   * Finds a transaction by its internal UUID
-   */
   public async getTransactionById(transactionId: string) {
     return await prisma.transaction.findUnique({
       where: { id: transactionId },
     });
   }
 
-  /**
-   * Syncs a single pending transaction with YooKassa API.
-   * This is the core logic for both the background worker and manual checks.
-   */
   public async syncTransactionStatus(
     transactionId: string
   ): Promise<TransactionStatus> {
@@ -238,8 +218,6 @@ export class WalletService {
     }
 
     if (!transaction.externalId) {
-      // If no externalId exists yet, the user probably never reached YooKassa
-      // We can mark it as FAILED if it's too old (e.g., > 30 mins)
       return TransactionStatus.PENDING;
     }
 
@@ -264,7 +242,7 @@ export class WalletService {
       if (data.status === 'canceled') {
         await prisma.transaction.update({
           where: { id: transactionId },
-          data: { status: TransactionStatus.FAILED }, // Or TransactionStatus.CANCELED
+          data: { status: TransactionStatus.FAILED },
         });
         return TransactionStatus.FAILED;
       }
@@ -297,12 +275,8 @@ export class WalletService {
     });
   }
 
-  /**
-   * Marks transactions as FAILED if they have no externalId
-   * and were created more than 1 hour ago.
-   */
   public async cancelAbandonedTransactions() {
-    const oneHourAgo = new Date(Date.now() - 30 * 60 * 1000); //new Date(Date.now() - 60 * 60 * 1000);
+    const oneHourAgo = new Date(Date.now() - 30 * 60 * 1000);
 
     return await prisma.transaction.updateMany({
       where: {
@@ -319,7 +293,7 @@ export class WalletService {
   }
 
   /**
-   * Logic for processing a user vote for a video.
+   * Logic for processing a user vote for a video (Project Series level)
    */
   public async processVideoVote(
     userId: number,
@@ -339,6 +313,7 @@ export class WalletService {
       const video = await tx.video.findUnique({
         where: { id: videoId },
         include: {
+          series: true, // Now linking to Series for economy tracking
           reviews: {
             where: { isExecuted: true },
             include: { critic: true },
@@ -346,7 +321,8 @@ export class WalletService {
         },
       });
 
-      if (!video || video.status !== VideoStatus.PENDING_SERIES) {
+      // Voting is allowed only if video status is not published yet
+      if (!video || video.status === VideoStatus.PUBLISHED) {
         throw new Error('Video is not available for voting');
       }
 
@@ -363,104 +339,88 @@ export class WalletService {
         },
       });
 
-      const updatedVideo = await tx.video.update({
-        where: { id: videoId },
+      // Update economy on the SERIES level
+      const updatedSeries = await tx.series.update({
+        where: { id: video.seriesId },
         data: { collectedFunds: { increment: amount } },
       });
 
-      if (updatedVideo.collectedFunds >= updatedVideo.votesRequired) {
-        await this.finalizeVideoPool(videoId, tx);
+      // If project is fully funded, finalize all videos in this series
+      if (updatedSeries.collectedFunds >= updatedSeries.votesRequired) {
+        await this.finalizeSeriesPool(video.seriesId, tx);
       }
 
-      return updatedVideo;
+      return video;
     });
   }
 
   /**
-   * Finalizes the pool and distributes funds based on economy constants.
+   * Finalizes the series pool and distributes funds.
    */
-  private async finalizeVideoPool(videoId: string, tx: any) {
-    const video = await tx.video.findUnique({
-      where: { id: videoId },
+  private async finalizeSeriesPool(seriesId: string, tx: any) {
+    const series = await tx.series.findUnique({
+      where: { id: seriesId },
       include: {
-        reviews: { where: { isExecuted: true }, include: { critic: true } },
+        videos: {
+          include: {
+            reviews: { where: { isExecuted: true }, include: { critic: true } },
+          },
+        },
       },
     });
 
-    const totalPool = video.collectedFunds;
+    const totalPool = series.collectedFunds;
 
+    // Default shares
     let authorRatio = VIDEO_ECONOMY.BASE_SHARES.AUTHOR;
     let platformRatio = VIDEO_ECONOMY.BASE_SHARES.PLATFORM;
     let criticRatio = VIDEO_ECONOMY.BASE_SHARES.CRITICS;
 
-    for (const review of video.reviews) {
-      const reputationBonus =
-        review.critic.reputation * VIDEO_ECONOMY.CRITIC_REPUTATION_WEIGHT;
+    // Apply modifiers from all reviews in the series
+    for (const video of series.videos) {
+      for (const review of video.reviews) {
+        const reputationBonus =
+          review.critic.reputation * VIDEO_ECONOMY.CRITIC_REPUTATION_WEIGHT;
 
-      if (review.type === ReviewType.NEGATIVE) {
-        authorRatio -= VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.AUTHOR_REDUCTION;
-        platformRatio +=
-          VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.PLATFORM_GAIN + reputationBonus;
-        criticRatio += VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.CRITIC_GAIN;
-      } else {
-        platformRatio -= VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.PLATFORM_REDUCTION;
-        criticRatio +=
-          VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.CRITIC_GAIN + reputationBonus;
+        if (review.type === ReviewType.NEGATIVE) {
+          authorRatio -= VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.AUTHOR_REDUCTION;
+          platformRatio +=
+            VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.PLATFORM_GAIN +
+            reputationBonus;
+          criticRatio += VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.CRITIC_GAIN;
+        } else {
+          platformRatio -=
+            VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.PLATFORM_REDUCTION;
+          criticRatio +=
+            VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.CRITIC_GAIN + reputationBonus;
+        }
       }
     }
 
-    const authorAmount = Math.floor(totalPool * authorRatio);
-    const platformAmount = Math.floor(totalPool * platformRatio);
-    const criticsTotalAmount = Math.floor(totalPool * criticRatio);
+    const authorAmount = Math.floor(totalPool * Math.max(authorRatio, 0));
 
     // 1. Author Payout
     await tx.user.update({
-      where: { id: video.authorId },
+      where: { id: series.authorId },
       data: { balance: { increment: authorAmount } },
     });
 
     await tx.transaction.create({
       data: {
-        userId: video.authorId,
+        userId: series.authorId,
         amount: authorAmount,
         type: TransactionType.AUTHOR_PAYOUT,
         status: TransactionStatus.COMPLETED,
-        videoId,
       },
     });
 
-    // 2. Critics Payout (Split)
-    if (video.reviews.length > 0) {
-      const perCriticAmount = Math.floor(
-        criticsTotalAmount / video.reviews.length
-      );
-      for (const review of video.reviews) {
-        await tx.user.update({
-          where: { id: review.criticId },
-          data: { balance: { increment: perCriticAmount } },
-        });
-        await tx.transaction.create({
-          data: {
-            userId: review.criticId,
-            amount: perCriticAmount,
-            type: TransactionType.CRITIC_REWARD,
-            status: TransactionStatus.COMPLETED,
-            videoId,
-          },
-        });
-      }
-    }
-
-    // 3. Status Update
-    await tx.video.update({
-      where: { id: videoId },
+    // 2. Finalize all videos in the series
+    await tx.video.updateMany({
+      where: { seriesId },
       data: { status: VideoStatus.PUBLISHED },
     });
   }
 
-  /**
-   * Logic for voting for a review to execute its impact.
-   */
   public async processReviewVote(userId: number, reviewId: string) {
     return await prisma.$transaction(async (tx) => {
       const review = await tx.review.findUnique({
