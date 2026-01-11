@@ -131,33 +131,37 @@ export const refreshToken = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * FIXED: Now returns JSON instead of redirecting.
+ * This satisfies the frontend ActivatePage logic.
+ */
 export const verifyEmail = async (req: Request, res: Response) => {
-  const token = req.query.token as string;
-  const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
+  // Use req.body or req.query depending on your frontend activateRequest
+  const token = (req.query.token as string) || (req.body.token as string);
 
   if (!token) {
-    return res.redirect(`${baseUrl}/email-confirmed?msg=empty`);
+    return res.status(400).json({
+      success: false,
+      message: 'Verification token is missing',
+    });
   }
 
   try {
     await authService.verifyEmail(token);
-    return res.redirect(`${baseUrl}/email-confirmed?msg=success`);
-  } catch (e) {
-    if (
-      (e instanceof Error && e.message.includes('Expired')) ||
-      (e instanceof Error && e.message.includes('invalid'))
-    ) {
-      return res.redirect(`${baseUrl}/email-confirmed?msg=expired`);
-    }
-
+    return res.json({
+      success: true,
+      message: 'Email successfully verified',
+    });
+  } catch (e: any) {
     loggerService.error(
       { e, route: 'verifyEmail' },
       'Error during email verification'
     );
 
-    return res
-      .status(500)
-      .json({ error: 'A server error occurred during email verification.' });
+    return res.status(400).json({
+      success: false,
+      message: e.message || 'Verification failed',
+    });
   }
 };
 

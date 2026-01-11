@@ -293,7 +293,7 @@ export class WalletService {
   }
 
   /**
-   * Logic for processing a user vote for a video (Project Series level)
+   * Logic for processing a user vote for a specific episode (Video level)
    */
   public async processVideoVote(
     userId: number,
@@ -313,24 +313,21 @@ export class WalletService {
       const video = await tx.video.findUnique({
         where: { id: videoId },
         include: {
-          series: true, // Now linking to Series for economy tracking
-          reviews: {
-            where: { isExecuted: true },
-            include: { critic: true },
-          },
+          series: true,
         },
       });
 
-      // Voting is allowed only if video status is not published yet
-      if (!video || video.status === VideoStatus.PUBLISHED) {
-        throw new Error('Video is not available for voting');
+      if (!video || video.isReleased) {
+        throw new Error('Video is already released or not found');
       }
 
+      // 1. Deduct funds from User
       await tx.user.update({
         where: { id: userId },
         data: { balance: { decrement: amount } },
       });
 
+      // 2. Create Vote record
       await tx.vote.create({
         data: {
           userId,
@@ -339,85 +336,90 @@ export class WalletService {
         },
       });
 
-      // Update economy on the SERIES level
-      const updatedSeries = await tx.series.update({
-        where: { id: video.seriesId },
+      // 3. Update Video funding progress
+      const updatedVideo = await tx.video.update({
+        where: { id: videoId },
         data: { collectedFunds: { increment: amount } },
       });
 
-      // If project is fully funded, finalize all videos in this series
-      if (updatedSeries.collectedFunds >= updatedSeries.votesRequired) {
-        await this.finalizeSeriesPool(video.seriesId, tx);
+      // 4. Update Series total cumulative earnings
+      await tx.series.update({
+        where: { id: video.seriesId },
+        data: { totalEarnings: { increment: amount } },
+      });
+
+      // 5. Finalize distribution if threshold is reached
+      if (updatedVideo.collectedFunds >= updatedVideo.votesRequired) {
+        await this.finalizeVideoPool(videoId, tx);
       }
 
-      return video;
+      return updatedVideo;
     });
   }
 
   /**
-   * Finalizes the series pool and distributes funds.
+   * Finalizes the funding for a specific video and distributes the pool
    */
-  private async finalizeSeriesPool(seriesId: string, tx: any) {
-    const series = await tx.series.findUnique({
-      where: { id: seriesId },
+  private async finalizeVideoPool(videoId: string, tx: any) {
+    const video = await tx.video.findUnique({
+      where: { id: videoId },
       include: {
-        videos: {
-          include: {
-            reviews: { where: { isExecuted: true }, include: { critic: true } },
-          },
+        reviews: {
+          where: { isExecuted: true },
+          include: { critic: true },
         },
       },
     });
 
-    const totalPool = series.collectedFunds;
+    if (!video) return;
 
-    // Default shares
+    const totalPool = video.collectedFunds;
+
     let authorRatio = VIDEO_ECONOMY.BASE_SHARES.AUTHOR;
     let platformRatio = VIDEO_ECONOMY.BASE_SHARES.PLATFORM;
     let criticRatio = VIDEO_ECONOMY.BASE_SHARES.CRITICS;
 
-    // Apply modifiers from all reviews in the series
-    for (const video of series.videos) {
-      for (const review of video.reviews) {
-        const reputationBonus =
-          review.critic.reputation * VIDEO_ECONOMY.CRITIC_REPUTATION_WEIGHT;
+    for (const review of video.reviews) {
+      const reputationBonus =
+        review.critic.reputation * VIDEO_ECONOMY.CRITIC_REPUTATION_WEIGHT;
 
-        if (review.type === ReviewType.NEGATIVE) {
-          authorRatio -= VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.AUTHOR_REDUCTION;
-          platformRatio +=
-            VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.PLATFORM_GAIN +
-            reputationBonus;
-          criticRatio += VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.CRITIC_GAIN;
-        } else {
-          platformRatio -=
-            VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.PLATFORM_REDUCTION;
-          criticRatio +=
-            VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.CRITIC_GAIN + reputationBonus;
-        }
+      if (review.type === ReviewType.NEGATIVE) {
+        authorRatio -= VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.AUTHOR_REDUCTION;
+        platformRatio +=
+          VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.PLATFORM_GAIN + reputationBonus;
+        criticRatio += VIDEO_ECONOMY.NEGATIVE_REVIEW_PENALTY.CRITIC_GAIN;
+      } else {
+        platformRatio -= VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.PLATFORM_REDUCTION;
+        criticRatio +=
+          VIDEO_ECONOMY.POSITIVE_REVIEW_BOOST.CRITIC_GAIN + reputationBonus;
       }
     }
 
     const authorAmount = Math.floor(totalPool * Math.max(authorRatio, 0));
 
-    // 1. Author Payout
+    // 1. Payout to Author
     await tx.user.update({
-      where: { id: series.authorId },
+      where: { id: video.authorId },
       data: { balance: { increment: authorAmount } },
     });
 
     await tx.transaction.create({
       data: {
-        userId: series.authorId,
+        userId: video.authorId,
         amount: authorAmount,
         type: TransactionType.AUTHOR_PAYOUT,
         status: TransactionStatus.COMPLETED,
+        videoId: video.id,
       },
     });
 
-    // 2. Finalize all videos in the series
-    await tx.video.updateMany({
-      where: { seriesId },
-      data: { status: VideoStatus.PUBLISHED },
+    // 2. Release the video
+    await tx.video.update({
+      where: { id: videoId },
+      data: {
+        isReleased: true,
+        status: VideoStatus.PUBLISHED,
+      },
     });
   }
 

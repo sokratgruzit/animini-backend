@@ -15,7 +15,7 @@ router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/refresh', refreshToken);
 router.get('/logout', logoutUser);
-router.get('/verify-email', verifyEmail);
+router.post('/verify-email', verifyEmail);
 router.get('/resend-email', authMiddleware, resendEmail);
 
 export default router;

@@ -39,8 +39,9 @@ export class AuthService {
       data: { token, userId: user.id, expiresAt: expires },
     });
 
-    const baseUrl = process.env.APP_URL || 'http://localhost:3000';
-    const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+    // FIXED: Points to the frontend activation route /activate/:link
+    const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
+    const verifyUrl = `${baseUrl}/activate/${token}`;
     await emailService.sendVerificationEmail(user.email, verifyUrl);
 
     const accessToken = generateAccessToken({ userId: user.id });
@@ -104,7 +105,6 @@ export class AuthService {
   }
 
   public async refresh(currentRefreshToken: string): Promise<AuthResult> {
-    // Changed return type to AuthResult to include user
     const payload = jwt.verify(currentRefreshToken, REFRESH_SECRET) as {
       userId: number;
     };
@@ -155,7 +155,10 @@ export class AuthService {
       data: { emailVerified: true },
     });
 
-    await prisma.emailVerification.delete({ where: { token } });
+    // FIXED: Using deleteMany to prevent "record not found" crashes on duplicate clicks
+    await prisma.emailVerification.deleteMany({
+      where: { token },
+    });
   }
 
   public async resendVerificationEmail(userId: number) {
@@ -170,8 +173,8 @@ export class AuthService {
       data: { token, userId: user.id, expiresAt: expires },
     });
 
-    const baseUrl = process.env.APP_URL || 'http://localhost:4000';
-    const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+    const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
+    const verifyUrl = `${baseUrl}/activate/${token}`;
 
     await emailService.sendVerificationEmail(user.email, verifyUrl);
   }

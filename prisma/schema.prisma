@@ -64,8 +64,8 @@ model User {
   reputation         Int                 @default(0)
   
   transactions       Transaction[]
-  series             Series[]            // Added: Group of content created by AUTHOR
-  videos             Video[]             // Individual video files
+  series             Series[]            
+  videos             Video[]             
   reviews            Review[]            
   votes              Vote[]              
 
@@ -77,16 +77,18 @@ model Series {
   id             String      @id @default(uuid())
   title          String
   description    String?
-  coverUrl       String?     // Visual representation of the series
+  coverUrl       String?     
   
-  // Economy moved to Series level for project-based funding
-  votesRequired  Int         @default(1000)
-  collectedFunds Int         @default(0)
+  /**
+   * totalEarnings tracks the cumulative amount of coins collected 
+   * across all videos in this series for author motivation.
+   */
+  totalEarnings  Int         @default(0)
 
   author         User        @relation(fields: [authorId], references: [id])
   authorId       Int
   
-  videos         Video[]     // Episodes within this series
+  videos         Video[]     
   
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
@@ -99,7 +101,16 @@ model Video {
   url            String
   status         VideoStatus @default(DRAFT)
   
-  // Link to the parent Series
+  /**
+   * Funding logic moved to Video level.
+   * votesRequired: The threshold to release the video (e.g., 1000).
+   * collectedFunds: Current amount of coins voted for this specific video.
+   * isReleased: Flag to determine if the video is available for public view.
+   */
+  votesRequired  Int         @default(1000)
+  collectedFunds Int         @default(0)
+  isReleased     Boolean     @default(false)
+
   series         Series      @relation(fields: [seriesId], references: [id])
   seriesId       String
 

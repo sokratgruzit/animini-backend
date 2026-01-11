@@ -33,6 +33,15 @@ export const VIDEO_ECONOMY = {
 
   CRITIC_REPUTATION_WEIGHT: 0.001,
 
+  /**
+   * The number of coins required to release a single video episode.
+   */
   DEFAULT_VIDEO_THRESHOLD: 1000,
+
+  /**
+   * Initial amount of collected funds for new series and videos.
+   */
+  INITIAL_FUNDS: 0,
+
   DEFAULT_REVIEW_THRESHOLD: 50,
 };

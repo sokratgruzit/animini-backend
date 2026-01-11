@@ -20,18 +20,19 @@ export const voteForVideo = async (req: AuthRequest, res: Response) => {
 
     const { videoId, amount } = voteVideoSchema.parse(req.body);
 
-    // walletService now returns video with included series data
+    // walletService now returns the updated video episode
     const updatedVideo = await walletService.processVideoVote(
       userId,
       videoId,
       amount
     );
 
-    // FIX: Accessing economy data from the parent Series level
+    // FIXED: Accessing economy data directly from the updated Video level
     return res.json({
       success: true,
-      collectedFunds: updatedVideo.series.collectedFunds, // Economy moved here
-      votesRequired: updatedVideo.series.votesRequired, // Economy moved here
+      collectedFunds: updatedVideo.collectedFunds,
+      votesRequired: updatedVideo.votesRequired,
+      isReleased: updatedVideo.isReleased,
       status: updatedVideo.status,
     });
   } catch (e: any) {

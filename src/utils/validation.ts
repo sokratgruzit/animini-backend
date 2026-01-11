@@ -40,11 +40,6 @@ export const createSeriesSchema = z.object({
     (val) => (val === '' ? undefined : val),
     z.url().optional()
   ),
-  votesRequired: z
-    .number()
-    .int()
-    .min(1)
-    .default(VIDEO_ECONOMY.DEFAULT_VIDEO_THRESHOLD),
 });
 
 /**
