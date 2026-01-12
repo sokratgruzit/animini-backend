@@ -6,12 +6,29 @@ import {
   ReviewType,
 } from '@prisma/client';
 import { calculateFiatAmount } from '../utils';
-import { loggerService } from '../services/logger-service';
+import { eventService } from './event-service';
 import { PAYMENT_CURRENCY, VIDEO_ECONOMY } from '../constants';
 
 export class WalletService {
   /**
-   * Returns both balance and reputation
+   * SSE Helper: Push current balance and reputation to the user's active sessions.
+   */
+  private async notifyBalanceUpdate(userId: number) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { balance: true, reputation: true },
+    });
+
+    if (user) {
+      eventService.emitToUser(userId, 'BALANCE_UPDATED', {
+        balance: user.balance,
+        reputation: user.reputation,
+      });
+    }
+  }
+
+  /**
+   * Returns both balance and reputation.
    */
   public async getUserBalance(
     userId: number
@@ -32,10 +49,11 @@ export class WalletService {
   }
 
   /**
-   * Deposits funds and creates a transaction record
+   * Deposits funds and creates a transaction record.
+   * Notifies user instantly via SSE.
    */
   public async addFunds(userId: number, amount: number) {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.update({
         where: { id: userId },
         data: {
@@ -56,10 +74,18 @@ export class WalletService {
 
       return user;
     });
+
+    // Reactive sync
+    await this.notifyBalanceUpdate(userId);
+    eventService.emitToUser(userId, 'TRANSACTION_SUCCESS', {
+      message: `Successfully deposited ${amount} coins.`,
+    });
+
+    return result;
   }
 
   /**
-   * Paginated transaction history
+   * Paginated transaction history.
    */
   public async getTransactions(userId: number, page: number, limit: number) {
     const skip = (page - 1) * limit;
@@ -85,14 +111,15 @@ export class WalletService {
   }
 
   /**
-   * Deducts funds and logs the transaction with proper status
+   * Deducts funds and logs the transaction.
+   * Triggers real-time balance update.
    */
   public async deductFunds(
     userId: number,
     amount: number,
     type: TransactionType
   ) {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: { balance: true },
@@ -122,10 +149,13 @@ export class WalletService {
 
       return updatedUser;
     });
+
+    await this.notifyBalanceUpdate(userId);
+    return result;
   }
 
   /**
-   * Creates a pending transaction and prepares YooKassa payment data
+   * Creates a pending transaction and prepares YooKassa payment data.
    */
   public async createDepositOrder(userId: number, amount: number) {
     const fiatValue = calculateFiatAmount(amount);
@@ -169,27 +199,23 @@ export class WalletService {
     });
   }
 
+  /**
+   * Finalizes a pending deposit (e.g., after successful YooKassa webhook).
+   */
   public async completeDeposit(transactionId: string) {
-    return await prisma.$transaction(async (tx) => {
-      const updatedTransaction = await tx.transaction.updateMany({
-        where: {
-          id: transactionId,
-          status: TransactionStatus.PENDING,
-        },
-        data: {
-          status: TransactionStatus.COMPLETED,
-        },
-      });
-
-      if (updatedTransaction.count === 0) {
-        return null;
-      }
-
+    const result = await prisma.$transaction(async (tx) => {
       const transaction = await tx.transaction.findUnique({
         where: { id: transactionId },
       });
 
-      if (!transaction) return null;
+      if (!transaction || transaction.status !== TransactionStatus.PENDING) {
+        return null;
+      }
+
+      await tx.transaction.update({
+        where: { id: transactionId },
+        data: { status: TransactionStatus.COMPLETED },
+      });
 
       const updatedUser = await tx.user.update({
         where: { id: transaction.userId },
@@ -200,6 +226,15 @@ export class WalletService {
 
       return updatedUser;
     });
+
+    if (result) {
+      await this.notifyBalanceUpdate(result.id);
+      eventService.emitToUser(result.id, 'TRANSACTION_SUCCESS', {
+        message: 'Your payment was processed successfully!',
+      });
+    }
+
+    return result;
   }
 
   public async getTransactionById(transactionId: string) {
@@ -208,6 +243,9 @@ export class WalletService {
     });
   }
 
+  /**
+   * Syncs transaction status with payment gateway.
+   */
   public async syncTransactionStatus(
     transactionId: string
   ): Promise<TransactionStatus> {
@@ -221,40 +259,36 @@ export class WalletService {
       return TransactionStatus.PENDING;
     }
 
-    try {
-      const response = await fetch(`api.yookassa.ru{transaction.externalId}`, {
-        headers: {
-          Authorization:
-            'Basic ' +
-            Buffer.from(
-              `${process.env.YCASSA_SHOP_ID}:${process.env.YCASSA_SECRET_KEY}`
-            ).toString('base64'),
-        },
-      });
+    // Clean Architecture: throw error and let infrastructure layer (worker/controller) handle logging
+    const response = await fetch(`api.yookassa.ru{transaction.externalId}`, {
+      headers: {
+        Authorization:
+          'Basic ' +
+          Buffer.from(
+            `${process.env.YCASSA_SHOP_ID}:${process.env.YCASSA_SECRET_KEY}`
+          ).toString('base64'),
+      },
+    });
 
-      const data: any = await response.json();
+    const data: any = await response.json();
 
-      if (data.status === 'succeeded') {
-        await this.completeDeposit(transactionId);
-        return TransactionStatus.COMPLETED;
-      }
-
-      if (data.status === 'canceled') {
-        await prisma.transaction.update({
-          where: { id: transactionId },
-          data: { status: TransactionStatus.FAILED },
-        });
-        return TransactionStatus.FAILED;
-      }
-
-      return TransactionStatus.PENDING;
-    } catch (error) {
-      loggerService.error(
-        { error, transactionId },
-        'Failed to sync transaction status'
-      );
-      throw error;
+    if (data.status === 'succeeded') {
+      await this.completeDeposit(transactionId);
+      return TransactionStatus.COMPLETED;
     }
+
+    if (data.status === 'canceled') {
+      await prisma.transaction.update({
+        where: { id: transactionId },
+        data: { status: TransactionStatus.FAILED },
+      });
+      eventService.emitToUser(transaction.userId, 'TRANSACTION_FAILED', {
+        message: 'Payment was canceled by provider.',
+      });
+      return TransactionStatus.FAILED;
+    }
+
+    return TransactionStatus.PENDING;
   }
 
   public async getStalePendingTransactions(limit: number = 50) {
@@ -293,14 +327,15 @@ export class WalletService {
   }
 
   /**
-   * Logic for processing a user vote for a specific episode (Video level)
+   * Logic for processing a user vote for a specific episode (Video level).
+   * Notifies the whole platform about progress and updates user's balance.
    */
   public async processVideoVote(
     userId: number,
     videoId: string,
     amount: number
   ) {
-    return await prisma.$transaction(async (tx) => {
+    const updatedVideoResult = await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: { balance: true },
@@ -312,53 +347,54 @@ export class WalletService {
 
       const video = await tx.video.findUnique({
         where: { id: videoId },
-        include: {
-          series: true,
-        },
+        include: { series: true },
       });
 
       if (!video || video.isReleased) {
         throw new Error('Video is already released or not found');
       }
 
-      // 1. Deduct funds from User
       await tx.user.update({
         where: { id: userId },
         data: { balance: { decrement: amount } },
       });
 
-      // 2. Create Vote record
       await tx.vote.create({
-        data: {
-          userId,
-          videoId,
-          amount,
-        },
+        data: { userId, videoId, amount },
       });
 
-      // 3. Update Video funding progress
       const updatedVideo = await tx.video.update({
         where: { id: videoId },
         data: { collectedFunds: { increment: amount } },
       });
 
-      // 4. Update Series total cumulative earnings
       await tx.series.update({
         where: { id: video.seriesId },
         data: { totalEarnings: { increment: amount } },
       });
 
-      // 5. Finalize distribution if threshold is reached
       if (updatedVideo.collectedFunds >= updatedVideo.votesRequired) {
         await this.finalizeVideoPool(videoId, tx);
       }
 
       return updatedVideo;
     });
+
+    // Reactive logic after transaction success
+    await this.notifyBalanceUpdate(userId);
+
+    // Broadcast progress to all connected users
+    eventService.broadcast('VIDEO_PROGRESS_UPDATED', {
+      videoId,
+      collectedFunds: updatedVideoResult.collectedFunds,
+      votesRequired: updatedVideoResult.votesRequired,
+    });
+
+    return updatedVideoResult;
   }
 
   /**
-   * Finalizes the funding for a specific video and distributes the pool
+   * Finalizes the funding for a specific video and distributes the pool.
    */
   private async finalizeVideoPool(videoId: string, tx: any) {
     const video = await tx.video.findUnique({
@@ -420,6 +456,19 @@ export class WalletService {
         isReleased: true,
         status: VideoStatus.PUBLISHED,
       },
+    });
+
+    // Notify participants in real-time
+    await this.notifyBalanceUpdate(video.authorId);
+    eventService.emitToUser(video.authorId, 'AUTHOR_PAYOUT_RECEIVED', {
+      amount: authorAmount,
+      videoTitle: video.title,
+    });
+
+    // Global notification that a new video is live
+    eventService.broadcast('VIDEO_PUBLISHED', {
+      videoId: video.id,
+      title: video.title,
     });
   }
 

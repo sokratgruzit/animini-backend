@@ -8,8 +8,13 @@ export interface UserType {
   password?: string;
   refreshToken?: string | null;
   isAdmin: boolean;
-  roles: Role[]; // Добавляем массив ролей
+  roles: Role[];
   emailVerified: boolean;
+  avatarUrl?: string | null;
+  bio?: string | null;
+  settings: any;
+  balance: number;
+  reputation: number;
   createdAt: Date;
   updatedAt: Date;
 }

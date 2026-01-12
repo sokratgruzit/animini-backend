@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../client';
 import { emailService } from './email-service';
+import { eventService } from './event-service';
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -9,15 +10,43 @@ import {
   comparePassword,
 } from '../utils/auth';
 import { RegisterInput, LoginInput } from '../utils';
-import { AuthResult } from '../types/auth';
+import { AuthResult, UserType } from '../types/auth';
 
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'secret_refresh';
 
 export class AuthService {
+  /**
+   * Infrastructure Gateway: Validates if user exists and returns full profile.
+   * This removes direct Prisma dependency from middleware.
+   */
+  public async validateUserSession(
+    userId: number
+  ): Promise<Omit<UserType, 'password' | 'refreshToken'> | null> {
+    return await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        emailVerified: true,
+        isAdmin: true,
+        roles: true,
+        avatarUrl: true,
+        bio: true,
+        settings: true,
+        balance: true,
+        reputation: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   public async register(data: RegisterInput): Promise<AuthResult> {
     const existingUser = await prisma.user.findUnique({
       where: { email: data.email },
     });
+
     if (existingUser) {
       throw new Error('User already exists!');
     }
@@ -30,6 +59,11 @@ export class AuthService {
         password: hashed,
         name: data.name,
         isAdmin: false,
+        avatarUrl: null,
+        bio: null,
+        settings: {},
+        balance: 0,
+        reputation: 0,
       },
     });
 
@@ -39,13 +73,13 @@ export class AuthService {
       data: { token, userId: user.id, expiresAt: expires },
     });
 
-    // FIXED: Points to the frontend activation route /activate/:link
     const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
     const verifyUrl = `${baseUrl}/activate/${token}`;
     await emailService.sendVerificationEmail(user.email, verifyUrl);
 
     const accessToken = generateAccessToken({ userId: user.id });
     const refreshToken = generateRefreshToken({ userId: user.id });
+
     await prisma.user.update({
       where: { id: user.id },
       data: { refreshToken },
@@ -59,6 +93,11 @@ export class AuthService {
         isAdmin: user.isAdmin,
         roles: user.roles,
         emailVerified: user.emailVerified,
+        avatarUrl: user.avatarUrl,
+        bio: user.bio,
+        settings: user.settings as Record<string, any>,
+        balance: user.balance,
+        reputation: user.reputation,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
@@ -75,7 +114,6 @@ export class AuthService {
     }
 
     const valid = await comparePassword(data.password, user.password);
-
     if (!valid) {
       throw new Error('Invalid email or password!');
     }
@@ -88,6 +126,8 @@ export class AuthService {
       data: { refreshToken },
     });
 
+    eventService.emitToUser(user.id, 'USER_LOGIN', { userId: user.id });
+
     return {
       user: {
         id: user.id,
@@ -96,6 +136,11 @@ export class AuthService {
         isAdmin: user.isAdmin,
         roles: user.roles,
         emailVerified: user.emailVerified,
+        avatarUrl: user.avatarUrl,
+        bio: user.bio,
+        settings: user.settings as Record<string, any>,
+        balance: user.balance,
+        reputation: user.reputation,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
@@ -133,6 +178,11 @@ export class AuthService {
         isAdmin: user.isAdmin,
         roles: user.roles,
         emailVerified: user.emailVerified,
+        avatarUrl: user.avatarUrl,
+        bio: user.bio,
+        settings: user.settings as Record<string, any>,
+        balance: user.balance,
+        reputation: user.reputation,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
@@ -150,15 +200,82 @@ export class AuthService {
       throw new Error('Expired or invalid token');
     }
 
-    await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { id: record.userId },
       data: { emailVerified: true },
     });
 
-    // FIXED: Using deleteMany to prevent "record not found" crashes on duplicate clicks
     await prisma.emailVerification.deleteMany({
       where: { token },
     });
+
+    eventService.emitToUser(updatedUser.id, 'USER_UPDATED', {
+      emailVerified: true,
+    });
+  }
+
+  public async updateProfile(
+    userId: number,
+    updateData: Record<string, any>
+  ): Promise<any> {
+    const allowedFields = ['name', 'avatarUrl', 'bio', 'settings'];
+
+    const safeData = Object.keys(updateData)
+      .filter((key) => allowedFields.includes(key))
+      .reduce(
+        (obj, key) => {
+          obj[key] = updateData[key];
+          return obj;
+        },
+        {} as Record<string, any>
+      );
+
+    if (Object.keys(safeData).length === 0) {
+      throw new Error('No valid fields provided');
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: safeData,
+    });
+
+    eventService.emitToUser(userId, 'USER_UPDATED', safeData);
+
+    return updated;
+  }
+
+  public async changePassword(
+    userId: number,
+    oldPass: string,
+    newPass: string
+  ): Promise<void> {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new Error('User not found');
+
+    const valid = await comparePassword(oldPass, user.password);
+    if (!valid) throw new Error('Invalid current password');
+
+    const hashed = await hashPassword(newPass);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashed, refreshToken: null },
+    });
+
+    eventService.emitToUser(userId, 'PASSWORD_CHANGED', {
+      timestamp: new Date(),
+    });
+    eventService.emitToUser(userId, 'USER_LOGOUT', {
+      reason: 'Password updated',
+    });
+  }
+
+  public async logout(userId: number): Promise<void> {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: null },
+    });
+
+    eventService.emitToUser(userId, 'USER_LOGOUT', { message: 'Logged out' });
   }
 
   public async resendVerificationEmail(userId: number) {

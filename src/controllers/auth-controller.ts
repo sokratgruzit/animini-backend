@@ -31,28 +31,18 @@ export const registerUser = async (req: Request, res: Response) => {
     });
   } catch (e) {
     if (e instanceof z.ZodError) {
-      const errorMessages = e.issues.map((issue) => issue.message);
-
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errorMessages,
-      });
+      return res
+        .status(400)
+        .json({ success: false, errors: e.issues.map((i) => i.message) });
     }
-
     if (e instanceof Error && e.message === 'User already exists!') {
       return res.status(409).json({ success: false, message: e.message });
     }
-
     loggerService.error(
       { e, route: 'registerUser', body: req.body },
-      'Error during user registration'
+      'Error during registration'
     );
-
-    return res.status(500).json({
-      success: false,
-      message: 'A server error occurred during registration.',
-    });
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -71,43 +61,26 @@ export const loginUser = async (req: Request, res: Response) => {
     });
   } catch (e) {
     if (e instanceof z.ZodError) {
-      const errorMessages = e.issues.map((issue) => issue.message);
-
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errorMessages,
-      });
+      return res
+        .status(400)
+        .json({ success: false, errors: e.issues.map((i) => i.message) });
     }
-
     if (e instanceof Error && e.message === 'Invalid email or password!') {
       return res.status(401).json({ success: false, message: e.message });
     }
-
-    loggerService.error(
-      { e, route: 'loginUser', body: req.body },
-      'Error during user login'
-    );
-
-    return res.status(500).json({
-      success: false,
-      message: 'A server error occurred during login.',
-    });
+    loggerService.error({ e, route: 'loginUser' }, 'Error during login');
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 export const refreshToken = async (req: Request, res: Response) => {
   const currentRefreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
-
   if (!currentRefreshToken) {
-    return res
-      .status(401)
-      .json({ success: false, message: 'Refresh token not found in cookie' });
+    return res.status(401).json({ success: false, message: 'Token not found' });
   }
 
   try {
     const result = await authService.refresh(currentRefreshToken);
-
     setRefreshCookie(res, result.refreshToken);
 
     return res.json({
@@ -116,92 +89,105 @@ export const refreshToken = async (req: Request, res: Response) => {
       user: result.user,
     });
   } catch (e) {
-    if (e instanceof Error && e.message === 'Invalid refresh token') {
-      return res.status(401).json({ success: false, message: e.message });
-    }
+    loggerService.error({ e, route: 'refreshToken' }, 'Error during refresh');
+    return res.status(401).json({ success: false, message: 'Invalid token' });
+  }
+};
 
+export const verifyEmail = async (req: Request, res: Response) => {
+  const token = (req.query.token as string) || (req.body.token as string);
+  if (!token)
+    return res.status(400).json({ success: false, message: 'Token missing' });
+
+  try {
+    await authService.verifyEmail(token);
+    return res.json({ success: true, message: 'Email verified' });
+  } catch (e: any) {
     loggerService.error(
-      { e, route: 'refreshToken' },
-      'Error during refresh token'
+      { e, route: 'verifyEmail' },
+      'Email verification failed'
     );
-
-    return res
-      .status(401)
-      .json({ success: false, message: 'Expired or invalid refresh token' });
+    return res.status(400).json({ success: false, message: e.message });
   }
 };
 
 /**
- * FIXED: Now returns JSON instead of redirecting.
- * This satisfies the frontend ActivatePage logic.
+ * UPDATED: Now calls authService.logout to trigger USER_LOGOUT event
  */
-export const verifyEmail = async (req: Request, res: Response) => {
-  // Use req.body or req.query depending on your frontend activateRequest
-  const token = (req.query.token as string) || (req.body.token as string);
-
-  if (!token) {
-    return res.status(400).json({
-      success: false,
-      message: 'Verification token is missing',
-    });
-  }
-
+export const logoutUser = async (req: AuthRequest, res: Response) => {
   try {
-    await authService.verifyEmail(token);
-    return res.json({
-      success: true,
-      message: 'Email successfully verified',
-    });
-  } catch (e: any) {
-    loggerService.error(
-      { e, route: 'verifyEmail' },
-      'Error during email verification'
-    );
+    if (req.user?.id) {
+      await authService.logout(req.user.id);
+    }
 
-    return res.status(400).json({
-      success: false,
-      message: e.message || 'Verification failed',
+    res.clearCookie(REFRESH_COOKIE_NAME, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
     });
+
+    return res.status(200).json({ success: true, message: 'Logged out!' });
+  } catch (e) {
+    loggerService.error({ e, route: 'logoutUser' }, 'Logout error');
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
-export const logoutUser = async (req: Request, res: Response) => {
-  res.clearCookie(REFRESH_COOKIE_NAME, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/',
-  });
+/**
+ * NEW: Update profile controller
+ */
+export const updateProfile = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.id)
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
 
-  return res
-    .status(200)
-    .json({ success: true, message: 'Successfully logged out!' });
+    const result = await authService.updateProfile(req.user.id, req.body);
+    return res.json({ success: true, user: result });
+  } catch (e: any) {
+    loggerService.error(
+      { e, route: 'updateProfile', body: req.body },
+      'Profile update error'
+    );
+    return res.status(400).json({ success: false, message: e.message });
+  }
+};
+
+/**
+ * NEW: Change password controller
+ */
+export const changePassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!req.user?.id)
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+    await authService.changePassword(req.user.id, oldPassword, newPassword);
+
+    // After password change, we usually want to clear cookies since sessions are invalidated
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: '/' });
+
+    return res.json({
+      success: true,
+      message: 'Password updated. Please log in again.',
+    });
+  } catch (e: any) {
+    loggerService.error(
+      { e, route: 'changePassword' },
+      'Password change error'
+    );
+    return res.status(400).json({ success: false, message: e.message });
+  }
 };
 
 export const resendEmail = async (req: AuthRequest, res: Response) => {
   try {
-    if (!req.user?.id) {
-      return res
-        .status(401)
-        .json({ success: false, message: 'User not authenticated' });
-    }
-
+    if (!req.user?.id)
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
     await authService.resendVerificationEmail(req.user.id);
-
     return res.status(200).json({ success: true, message: 'Email sent!' });
-  } catch (e) {
-    if (e instanceof Error && e.message.includes('User not found')) {
-      return res.status(401).json({ success: false, message: e.message });
-    }
-
-    loggerService.error(
-      { e, route: 'resendEmail' },
-      'Error during email sending'
-    );
-
-    return res.status(500).json({
-      success: false,
-      message: 'A server error occurred during email sending.',
-    });
+  } catch (e: any) {
+    loggerService.error({ e, route: 'resendEmail' }, 'Resend email error');
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };

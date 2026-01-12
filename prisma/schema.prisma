@@ -60,6 +60,15 @@ model User {
   isAdmin            Boolean             @default(false)
   roles              Role[]              @default([USER])
   
+  // NEW: Profile & Customization
+  avatarUrl          String?
+  bio                String?
+  /**
+   * Flexible JSON for UI settings, notification toggles, etc.
+   * Format: { "theme": "dark", "notifications": { "email": true } }
+   */
+  settings           Json?               @default("{}")
+  
   balance            Int                 @default(0)
   reputation         Int                 @default(0)
   
@@ -79,10 +88,6 @@ model Series {
   description    String?
   coverUrl       String?     
   
-  /**
-   * totalEarnings tracks the cumulative amount of coins collected 
-   * across all videos in this series for author motivation.
-   */
   totalEarnings  Int         @default(0)
 
   author         User        @relation(fields: [authorId], references: [id])
@@ -101,12 +106,6 @@ model Video {
   url            String
   status         VideoStatus @default(DRAFT)
   
-  /**
-   * Funding logic moved to Video level.
-   * votesRequired: The threshold to release the video (e.g., 1000).
-   * collectedFunds: Current amount of coins voted for this specific video.
-   * isReleased: Flag to determine if the video is available for public view.
-   */
   votesRequired  Int         @default(1000)
   collectedFunds Int         @default(0)
   isReleased     Boolean     @default(false)
@@ -149,8 +148,8 @@ model Vote {
   user       User     @relation(fields: [userId], references: [id])
   userId     Int
   
-  video      Video?   @relation(fields: [videoId], references: [id])
-  videoId    String?
+  video          Video?   @relation(fields: [videoId], references: [id])
+  videoId        String?
   
   reviewId   String?
   

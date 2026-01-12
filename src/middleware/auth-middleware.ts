@@ -1,9 +1,11 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../client';
 import { AuthRequest } from '../types/auth';
+import { authService } from '../services/auth-service';
+import { REFRESH_COOKIE_NAME } from '../constants';
 
 const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'secret_access';
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'secret_refresh';
 
 export async function authMiddleware(
   req: AuthRequest,
@@ -11,40 +13,52 @@ export async function authMiddleware(
   next: NextFunction
 ) {
   const authHeader = req.headers.authorization;
-  if (!authHeader)
-    return res.status(401).json({ message: 'Token not presented' });
+  const bearerToken = authHeader?.split(' ')[1];
+  const refreshCookie = req.cookies?.[REFRESH_COOKIE_NAME];
 
-  const token = authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ message: 'Token is undefined' });
+  let userId: number | null = null;
 
   try {
-    const payload = jwt.verify(token, ACCESS_SECRET) as { userId: number };
-    if (!payload.userId) throw new Error('Invalid token');
+    /**
+     * 1. Standard Authorization Header Strategy
+     */
+    if (bearerToken) {
+      const payload = jwt.verify(bearerToken, ACCESS_SECRET) as {
+        userId: number;
+      };
+      userId = payload.userId;
+    } else if (refreshCookie) {
+      /**
+       * 2. SSE Fallback Strategy: Use Refresh Cookie
+       * EventSource API does not support custom headers but sends cookies.
+       */
+      const payload = jwt.verify(refreshCookie, REFRESH_SECRET) as {
+        userId: number;
+      };
+      userId = payload.userId;
+    }
 
-    req.userId = payload.userId;
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
 
-    // Загружаем пользователя из базы
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: false,
-        emailVerified: true,
-        isAdmin: true,
-        roles: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    /**
+     * 3. Clean Architecture: Delegate DB fetching to the Service Layer.
+     * Middleware remains infrastructure-agnostic.
+     */
+    const user = await authService.validateUserSession(userId);
 
-    if (!user) return res.status(401).json({ message: 'Token not found' });
+    if (!user) {
+      return res
+        .status(401)
+        .json({ message: 'User session invalid or expired' });
+    }
 
-    req.user = user;
+    req.userId = user.id;
+    req.user = user as any;
 
     next();
-  } catch {
-    return res.status(401).json({ message: 'Invalid or expired token' });
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid or expired credentials' });
   }
 }

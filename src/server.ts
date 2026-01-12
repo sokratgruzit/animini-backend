@@ -7,6 +7,7 @@ import authRouter from './routes/auth';
 import walletRouter from './routes/wallet';
 import videoRouter from './routes/video';
 import interactionRouter from './routes/interaction';
+import eventRouter from './routes/events';
 
 import { initTransactionWorker } from './workers/transaction-worker';
 
@@ -27,6 +28,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/wallet', walletRouter);
 app.use('/api/videos', videoRouter);
 app.use('/api/interactions', interactionRouter);
+app.use('/api/events', eventRouter);
 
 const PORT = process.env.PORT || 3000;
 
