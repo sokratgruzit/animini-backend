@@ -60,13 +60,8 @@ model User {
   isAdmin            Boolean             @default(false)
   roles              Role[]              @default([USER])
   
-  // NEW: Profile & Customization
   avatarUrl          String?
   bio                String?
-  /**
-   * Flexible JSON for UI settings, notification toggles, etc.
-   * Format: { "theme": "dark", "notifications": { "email": true } }
-   */
   settings           Json?               @default("{}")
   
   balance            Int                 @default(0)
@@ -87,6 +82,8 @@ model Series {
   title          String
   description    String?
   coverUrl       String?     
+  
+  tags           String[]    @default([])
   
   totalEarnings  Int         @default(0)
 

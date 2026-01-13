@@ -4,7 +4,7 @@ import { ReviewType } from '@prisma/client';
 import { PASSWORD_VALIDATION_REGEX, VIDEO_ECONOMY } from '../constants';
 
 export const registerSchema = z.object({
-  email: z.email('Invalid email format'),
+  email: z.string().email('Invalid email format'),
   name: z.string().min(1, 'Name is required'),
   password: z
     .string()
@@ -16,7 +16,7 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.email('Invalid email format'),
+  email: z.string().email('Invalid email format'),
   password: z
     .string()
     .min(8, 'Password must be at least 8 characters long')
@@ -32,14 +32,20 @@ export const depositSchema = z.object({
 
 /**
  * Schema for creating a new Series (2026 Economy Model)
+ * Updated to support Tags for AI2UI categorization.
  */
 export const createSeriesSchema = z.object({
   title: z.string().min(3).max(100),
   description: z.string().max(1000).optional(),
   coverUrl: z.preprocess(
     (val) => (val === '' ? undefined : val),
-    z.url().optional()
+    z.string().url().optional()
   ),
+  /**
+   * Added tags for classification.
+   * Ensures input is an array of strings.
+   */
+  tags: z.array(z.string()).default([]),
 });
 
 /**
@@ -48,23 +54,23 @@ export const createSeriesSchema = z.object({
 export const createVideoSchema = z.object({
   title: z.string().min(3).max(100),
   description: z.string().max(500).optional(),
-  url: z.url(),
+  url: z.string().url(),
   seriesId: z.string().uuid('Invalid series ID reference'),
 });
 
 export const voteVideoSchema = z.object({
-  videoId: z.uuid(),
+  videoId: z.string().uuid(),
   amount: z.number().int().min(1).default(1),
 });
 
 export const createReviewSchema = z.object({
-  videoId: z.uuid(),
+  videoId: z.string().uuid(),
   content: z.string().min(10).max(2000),
-  type: z.enum(ReviewType),
+  type: z.nativeEnum(ReviewType),
 });
 
 export const voteReviewSchema = z.object({
-  reviewId: z.uuid(),
+  reviewId: z.string().uuid(),
 });
 
 /**
@@ -73,7 +79,23 @@ export const voteReviewSchema = z.object({
 export const uploadRequestSchema = z.object({
   fileName: z.string().min(1),
   fileType: z.string(),
-  seriesId: z.uuid('Invalid series ID reference'),
+  seriesId: z.string().uuid('Invalid series ID reference'),
+});
+
+/**
+ * Validation schema for the public feed query parameters
+ */
+export const publicFeedSchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.preprocess(
+    (val) => Number(val),
+    z.number().int().positive().default(10)
+  ),
+  tags: z.preprocess(
+    (val) => (typeof val === 'string' ? val.split(',') : val),
+    z.array(z.string()).optional()
+  ),
+  type: z.enum(['hot', 'new', 'completed', 'most_funded']).default('new'),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;
@@ -85,3 +107,4 @@ export type VoteVideoInput = z.infer<typeof voteVideoSchema>;
 export type CreateReviewInput = z.infer<typeof createReviewSchema>;
 export type VoteReviewInput = z.infer<typeof voteReviewSchema>;
 export type UploadRequestInput = z.infer<typeof uploadRequestSchema>;
+export type PublicFeed = z.infer<typeof publicFeedSchema>;

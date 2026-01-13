@@ -7,8 +7,35 @@ import {
   createVideoSchema,
   createSeriesSchema,
   uploadRequestSchema,
-  type UploadRequestInput, // Import the inferred type
+  publicFeedSchema,
+  type UploadRequestInput,
 } from '../utils/validation';
+
+/**
+ * PUBLIC action: Fetch the main discover feed with snapshot data
+ */
+export const getPublicFeed = async (req: AuthRequest, res: Response) => {
+  try {
+    const validatedQuery = publicFeedSchema.parse(req.query);
+
+    const result = await videoService.getPublicFeed({
+      cursor: validatedQuery.cursor,
+      limit: validatedQuery.limit,
+      tags: validatedQuery.tags,
+      type: validatedQuery.type as any,
+    });
+
+    return res.json({
+      success: true,
+      ...result,
+    });
+  } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 /**
  * AUTHOR action: Request a secure upload URL from storage service
@@ -25,7 +52,6 @@ export const getUploadUrl = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Explicitly cast the parsed result to UploadRequestInput to fix TS2339
     const payload = uploadRequestSchema.parse(req.body) as UploadRequestInput;
     const { fileName, seriesId } = payload;
 

@@ -19,29 +19,24 @@ export const VIDEO_ECONOMY = {
     PLATFORM: 0.2,
     CRITICS: 0.1,
   },
-
   NEGATIVE_REVIEW_PENALTY: {
     AUTHOR_REDUCTION: 0.1,
     PLATFORM_GAIN: 0.05,
     CRITIC_GAIN: 0.05,
   },
-
   POSITIVE_REVIEW_BOOST: {
     PLATFORM_REDUCTION: 0.05,
     CRITIC_GAIN: 0.05,
   },
-
   CRITIC_REPUTATION_WEIGHT: 0.001,
-
   /**
    * The number of coins required to release a single video episode.
    */
   DEFAULT_VIDEO_THRESHOLD: 1000,
-
   /**
    * Initial amount of collected funds for new series and videos.
    */
   INITIAL_FUNDS: 0,
-
   DEFAULT_REVIEW_THRESHOLD: 50,
+  CREATION_FEE: 500,
 };

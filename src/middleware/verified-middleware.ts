@@ -1,16 +1,16 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types/auth';
+import { eventService } from '../services/event-service';
 
 /**
  * Middleware to ensure the user has a verified email address.
- * Must be used AFTER authMiddleware.
+ * Notifies the frontend via SSE if verification is missing.
  */
 export async function verifiedMiddleware(
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) {
-  // If user is not even logged in (though authMiddleware should catch this)
   if (!req.user) {
     return res.status(401).json({
       success: false,
@@ -18,12 +18,20 @@ export async function verifiedMiddleware(
     });
   }
 
-  // The critical check: emailVerified must be true
   if (!req.user.emailVerified) {
+    /**
+     * Trigger SSE event to sync frontend state and show notification.
+     * We pass the current user state to ensure Redux is up to date.
+     */
+    eventService.emitToUser(req.user.id, 'USER_UPDATED', {
+      ...req.user,
+      emailVerified: false,
+    });
+
     return res.status(403).json({
       success: false,
       message: 'Please verify your email address to access this feature.',
-      code: 'EMAIL_NOT_VERIFIED', // Handy for frontend to show specific modals
+      code: 'EMAIL_NOT_VERIFIED',
     });
   }
 

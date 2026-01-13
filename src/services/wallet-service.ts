@@ -13,7 +13,7 @@ export class WalletService {
   /**
    * SSE Helper: Push current balance and reputation to the user's active sessions.
    */
-  private async notifyBalanceUpdate(userId: number) {
+  public async notifyBalanceUpdate(userId: number) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { balance: true, reputation: true },
